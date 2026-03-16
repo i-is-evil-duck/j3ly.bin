@@ -102,6 +102,10 @@ fn serveFile(conn: std.net.StreamServer.Connection, id: []const u8) !void {
         _ = files.remove(id);
         mutex.unlock();
         fs.cwd().deleteFile(m.path) catch {};
+        const folder_path = fs.path.dirname(m.path);
+        if (folder_path) |p| {
+            fs.cwd().deleteDir(p) catch {};
+        }
         return send404(conn);
     }
 
@@ -138,7 +142,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     const filename = blk: {
         var iter = std.mem.split(u8, headers, "\r\n");
         while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "X-Filename: ")) {
+            if (std.mem.startsWith(u8, line, "x-filename: ")) {
                 break :blk try allocator.dupe(u8, line[12..]);
             }
         }
@@ -149,7 +153,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     const ttl = blk: {
         var iter = std.mem.split(u8, headers, "\r\n");
         while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "X-Ttl: ")) {
+            if (std.mem.startsWith(u8, line, "x-ttl: ")) {
                 break :blk try allocator.dupe(u8, line[7..]);
             }
         }
@@ -164,7 +168,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     defer allocator.free(folder_path);
     try fs.cwd().makePath(folder_path);
 
-    const filepath = try std.fmt.allocPrint(allocator, "{s}/file", .{folder_path});
+    const filepath = try std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_path, id });
     defer allocator.free(filepath);
 
     const file = try fs.cwd().createFile(filepath, .{});
@@ -191,7 +195,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     mutex.lock();
     try files.put(id_copy, .{
         .path = path_copy,
-        .name = filename,
+        .name = try std.fmt.allocPrint(allocator, "{s}.bin", .{id}),
         .size = body_read,
         .expires = time.timestamp() + parseTtl(ttl),
     });
@@ -244,7 +248,13 @@ fn cleanupTask() !void {
 
         for (to_delete.items) |id| {
             if (files.getEntry(id)) |entry| {
+                const path_copy = try allocator.dupe(u8, entry.value_ptr.path);
+                const folder = fs.path.dirname(path_copy);
                 fs.cwd().deleteFile(entry.value_ptr.path) catch {};
+                if (folder) |p| {
+                    fs.cwd().deleteDir(p) catch {};
+                }
+                allocator.free(path_copy);
                 allocator.free(entry.value_ptr.path);
                 allocator.free(entry.value_ptr.name);
                 _ = files.remove(id);
