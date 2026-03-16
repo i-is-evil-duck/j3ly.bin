@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>📁 Share</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui,sans-serif;max-width:600px;margin:50px auto;padding:20px;background:#0f0f0f;color:#fff}
+        #drop{border:3px dashed #333;padding:60px;text-align:center;border-radius:12px;cursor:pointer;transition:.2s}
+        #drop:hover,#drop.drag{border-color:#0f0;border-style:solid;background:#0f01}
+        #file{display:none}
+        .item{display:flex;justify-content:space-between;align-items:center;padding:12px;margin:8px 0;background:#1a1a1a;border-radius:8px}
+        .link{color:#0f0;text-decoration:none;word-break:break-all}
+        .link:hover{text-decoration:underline}
+        button{background:#333;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer}
+        button:hover{background:#444}
+        #progress{height:2px;background:#0f0;width:0%;transition:.3s;position:fixed;top:0;left:0}
+    </style>
+</head>
+<body>
+    <div id="progress"></div>
+    <h1>📁 TempShare</h1>
+    <p style="color:#666;margin:10px 0">Drop file → get link → auto-deletes in 24h</p>
+    <div id="drop"><p>Drop file or click</p><input type="file" id="file"></div>
+    <div id="list"></div>
+    <script>
+        const $ = id => document.getElementById(id);
+        const drop = $('drop'), file = $('file'), list = $('list'), prog = $('progress');
+        drop.onclick = () => file.click();
+        drop.ondragover = e => { e.preventDefault(); drop.classList.add('drag'); };
+        drop.ondragleave = () => drop.classList.remove('drag');
+        drop.ondrop = e => { e.preventDefault(); drop.classList.remove('drag'); handle(e.dataTransfer.files[0]); };
+        file.onchange = e => handle(e.target.files[0]);
+        async function handle(f) {
+            if (!f) return;
+            const xhr = new XMLHttpRequest();
+            xhr.upload.onprogress = e => prog.style.width = (e.loaded/e.total*100) + '%';
+            xhr.onload = () => {
+                prog.style.width = '0';
+                const r = JSON.parse(xhr.responseText);
+                const div = document.createElement('div');
+                div.className = 'item';
+                div.innerHTML = `<a class="link" href="${r.url}" target="_blank">${location.origin}${r.url}</a><button onclick="navigator.clipboard.writeText('${location.origin}${r.url}')">Copy</button>`;
+                list.prepend(div);
+            };
+            xhr.open('POST', '/upload');
+            xhr.setRequestHeader('x-filename', f.name);
+            xhr.send(f);
+        }
+    </script>
+</body>
+</html>

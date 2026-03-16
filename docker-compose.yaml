@@ -1,0 +1,12 @@
+services:
+  share:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - data:/data
+    tmpfs:
+      - /tmp:size=50m
+volumes:
+  data:
+  
