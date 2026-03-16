@@ -4,8 +4,22 @@ const time = std.time;
 
 const PORT = 8080;
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024;
-const MAX_RETENTION_SEC = 24 * 60 * 60;
+const DEFAULT_RETENTION_SEC = 2 * 24 * 60 * 60;
 const DATA_DIR = "/data";
+
+fn parseTtl(ttl: []const u8) i64 {
+    if (ttl.len < 2) return DEFAULT_RETENTION_SEC;
+    const num = std.fmt.parseInt(i64, ttl[0 .. ttl.len - 1], 10) catch return DEFAULT_RETENTION_SEC;
+    const unit = ttl[ttl.len - 1];
+    return switch (unit) {
+        'm' => num * 60,
+        'h' => num * 60 * 60,
+        'd' => num * 24 * 60 * 60,
+        'w' => num * 7 * 24 * 60 * 60,
+        'y' => num * 365 * 24 * 60 * 60,
+        else => DEFAULT_RETENTION_SEC,
+    };
+}
 
 const FileMeta = struct {
     path: []const u8,
@@ -132,6 +146,17 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     };
     defer allocator.free(filename);
 
+    const ttl = blk: {
+        var iter = std.mem.split(u8, headers, "\r\n");
+        while (iter.next()) |line| {
+            if (std.mem.startsWith(u8, line, "X-Ttl: ")) {
+                break :blk try allocator.dupe(u8, line[7..]);
+            }
+        }
+        break :blk try allocator.dupe(u8, "48h");
+    };
+    defer allocator.free(ttl);
+
     if (content_len > MAX_FILE_SIZE) return sendError(conn, "File too large");
 
     const id = try generateId();
@@ -164,7 +189,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
         .path = path_copy,
         .name = filename,
         .size = body_read,
-        .expires = time.timestamp() + MAX_RETENTION_SEC,
+        .expires = time.timestamp() + parseTtl(ttl),
     });
     mutex.unlock();
 

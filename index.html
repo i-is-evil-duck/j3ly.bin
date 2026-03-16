@@ -9,6 +9,7 @@
         #drop{border:3px dashed #333;padding:60px;text-align:center;border-radius:12px;cursor:pointer;transition:.2s}
         #drop:hover,#drop.drag{border-color:#0f0;border-style:solid;background:#0f01}
         #file{display:none}
+        select{background:#333;color:#fff;border:1px solid #444;padding:8px 12px;border-radius:6px;margin-bottom:15px;font-size:14px}
         .item{display:flex;justify-content:space-between;align-items:center;padding:12px;margin:8px 0;background:#1a1a1a;border-radius:8px}
         .link{color:#0f0;text-decoration:none;word-break:break-all}
         .link:hover{text-decoration:underline}
@@ -20,12 +21,23 @@
 <body>
     <div id="progress"></div>
     <h1>📁 TempShare</h1>
-    <p style="color:#666;margin:10px 0">Drop file → get link → auto-deletes in 24h</p>
+    <p style="color:#666;margin:10px 0">Drop file → get link → auto-deletes</p>
+    <select id="ttl">
+        <option value="30m">30 minutes</option>
+        <option value="6h">6 hours</option>
+        <option value="48h" selected>48 hours</option>
+        <option value="2w">2 weeks</option>
+        <option value="1m">1 month</option>
+        <option value="3m">3 months</option>
+        <option value="6m">6 months</option>
+        <option value="1y">1 year</option>
+        <option value="3y">3 years</option>
+    </select>
     <div id="drop"><p>Drop file or click</p><input type="file" id="file"></div>
     <div id="list"></div>
     <script>
         const $ = id => document.getElementById(id);
-        const drop = $('drop'), file = $('file'), list = $('list'), prog = $('progress');
+        const drop = $('drop'), file = $('file'), list = $('list'), prog = $('progress'), ttl = $('ttl');
         drop.onclick = () => file.click();
         drop.ondragover = e => { e.preventDefault(); drop.classList.add('drag'); };
         drop.ondragleave = () => drop.classList.remove('drag');
@@ -45,6 +57,7 @@
             };
             xhr.open('POST', '/upload');
             xhr.setRequestHeader('x-filename', f.name);
+            xhr.setRequestHeader('x-ttl', ttl.value);
             xhr.send(f);
         }
     </script>
