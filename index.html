@@ -10,7 +10,8 @@
         #drop:hover,#drop.drag{border-color:#0f0;border-style:solid;background:#0f01}
         #file{display:none}
         select{background:#333;color:#fff;border:1px solid #444;padding:8px 12px;border-radius:6px;margin-bottom:15px;font-size:14px}
-        .item{display:flex;justify-content:space-between;align-items:center;padding:12px;margin:8px 0;background:#1a1a1a;border-radius:8px}
+        .item{display:flex;justify-content:space-between;align-items:center;padding:12px;margin:8px 0;background:#1a1a1a;border-radius:8px;gap:10px}
+        .name{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#888}
         .link{color:#0f0;text-decoration:none;word-break:break-all}
         .link:hover{text-decoration:underline}
         button{background:#333;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer}
@@ -52,7 +53,7 @@
                 const r = JSON.parse(xhr.responseText);
                 const div = document.createElement('div');
                 div.className = 'item';
-                div.innerHTML = `<a class="link" href="${r.url}" target="_blank">${location.origin}${r.url}</a><button onclick="navigator.clipboard.writeText('${location.origin}${r.url}')">Copy</button>`;
+                div.innerHTML = `<a class="link" href="${r.url}" target="_blank">${location.origin}${r.url}</a><span class="name">${r.name}</span><button onclick="navigator.clipboard.writeText('${location.origin}${r.url}')">Copy</button>`;
                 list.prepend(div);
             };
             xhr.open('POST', '/upload');

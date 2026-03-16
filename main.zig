@@ -201,7 +201,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     });
     mutex.unlock();
 
-    const resp = try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"url\":\"/s/{s}\"}}", .{ id, id });
+    const resp = try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"url\":\"/s/{s}\",\"name\":\"{s}\"}}", .{ id, id, filename });
     defer allocator.free(resp);
 
     const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ resp.len, resp });
