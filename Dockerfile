@@ -10,7 +10,6 @@ RUN zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall && \
 
 FROM scratch
 COPY --from=builder /app/zig-out/bin/share /share
-COPY --from=builder /app/index.html /index.html
 ENV DATA_DIR=/data
 EXPOSE 8080
 ENTRYPOINT ["/share"]
