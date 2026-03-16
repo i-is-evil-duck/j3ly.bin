@@ -160,7 +160,11 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     if (content_len > MAX_FILE_SIZE) return sendError(conn, "File too large");
 
     const id = try generateId();
-    const filepath = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ DATA_DIR, id });
+    const folder_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ DATA_DIR, id });
+    defer allocator.free(folder_path);
+    try fs.cwd().makePath(folder_path);
+
+    const filepath = try std.fmt.allocPrint(allocator, "{s}/file", .{folder_path});
     defer allocator.free(filepath);
 
     const file = try fs.cwd().createFile(filepath, .{});
