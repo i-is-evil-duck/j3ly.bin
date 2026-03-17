@@ -2,7 +2,7 @@
 
 
 ## Zig Bin
-A super tiny temp file sharing website in Zig and build size under 56.25 KB!!!
+A super tiny temp file sharing website in Zig and build size under 56.1 KB!!!
 
 ## Views
 
