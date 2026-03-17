@@ -142,7 +142,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     const filename = blk: {
         var iter = std.mem.split(u8, headers, "\r\n");
         while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "x-filename: ")) {
+            if (std.mem.startsWith(u8, line, "X-Filename: ")) {
                 break :blk try allocator.dupe(u8, line[12..]);
             }
         }
@@ -153,7 +153,7 @@ fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body
     const ttl = blk: {
         var iter = std.mem.split(u8, headers, "\r\n");
         while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "x-ttl: ")) {
+            if (std.mem.startsWith(u8, line, "X-Ttl: ")) {
                 break :blk try allocator.dupe(u8, line[7..]);
             }
         }
