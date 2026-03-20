@@ -4,7 +4,9 @@ const time = std.time;
 
 const PORT = 8080;
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024;
-const DEFAULT_RETENTION_SEC = 2 * 24 * 60 * 60;
+const DAILY_LIMIT = 15 * 1024 * 1024 * 1024;
+const CHUNK_SIZE = 1024 * 1024;
+const DEFAULT_RETENTION_SEC = 30 * 60;
 const DATA_DIR = "/data";
 
 fn parseTtl(ttl: []const u8) i64 {
@@ -16,6 +18,7 @@ fn parseTtl(ttl: []const u8) i64 {
         'h' => num * 60 * 60,
         'd' => num * 24 * 60 * 60,
         'w' => num * 7 * 24 * 60 * 60,
+        'M' => num * 30 * 24 * 60 * 60,
         'y' => num * 365 * 24 * 60 * 60,
         else => DEFAULT_RETENTION_SEC,
     };
@@ -28,9 +31,21 @@ const FileMeta = struct {
     expires: i64,
 };
 
+const IpDay = struct { ip: u32, day: i64 };
+
+const IpDayContext = struct {
+    pub fn hash(_: @This(), k: IpDay) u64 {
+        return @as(u64, k.ip) << 32 | @as(u64, @intCast(k.day));
+    }
+    pub fn eql(_: @This(), a: IpDay, b: IpDay) bool {
+        return a.ip == b.ip and a.day == b.day;
+    }
+};
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
 var files = std.StringHashMap(FileMeta).init(allocator);
+var ip_usage = std.HashMap(IpDay, u64, IpDayContext, 80).init(allocator);
 var mutex = std.Thread.Mutex{};
 
 pub fn main() !void {
@@ -51,20 +66,47 @@ pub fn main() !void {
     }
 }
 
+fn getIp(addr: std.net.Address) u32 {
+    return @as(u32, @bitCast(addr.in.sa.addr));
+}
+
+fn readRequest(conn: std.net.StreamServer.Connection, buf: []u8) !?usize {
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = try conn.stream.read(buf[total..]);
+        if (n == 0) break;
+        total += n;
+        if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |_| return total;
+    }
+    return if (total > 0) total else null;
+}
+
+fn getHeader(headers: []const u8, name: []const u8) ?[]const u8 {
+    var iter = std.mem.split(u8, headers, "\r\n");
+    while (iter.next()) |line| {
+        if (std.mem.startsWith(u8, line, name)) {
+            return line[name.len..];
+        }
+    }
+    return null;
+}
+
 fn handleConnection(conn: std.net.StreamServer.Connection) !void {
     defer conn.stream.close();
+    const client_ip = getIp(conn.address);
 
-    var buf: [8192]u8 = undefined;
-    const n = try conn.stream.read(&buf);
+    var buf: [65536]u8 = undefined;
+    const n = (try readRequest(conn, &buf)) orelse return;
     if (n == 0) return;
 
     const request = buf[0..n];
     const end_of_header = std.mem.indexOf(u8, request, "\r\n\r\n") orelse return;
+    const headers = request[0..end_of_header];
+    const body_start = end_of_header + 4;
 
-    const req_line = request[0..end_of_header];
-    var parts = std.mem.split(u8, req_line, " ");
-    const method = parts.next() orelse return;
-    const path = parts.next() orelse return;
+    var req_iter = std.mem.split(u8, headers, " ");
+    const method = req_iter.next() orelse return;
+    const path = req_iter.next() orelse return;
 
     if (std.mem.eql(u8, method, "GET")) {
         if (std.mem.eql(u8, path, "/")) {
@@ -74,8 +116,8 @@ fn handleConnection(conn: std.net.StreamServer.Connection) !void {
         } else {
             try send404(conn);
         }
-    } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/upload")) {
-        try handleUpload(conn, request, end_of_header + 4);
+    } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/chunk")) {
+        try handleChunk(conn, headers, request, body_start, n, client_ip);
     } else {
         try send404(conn);
     }
@@ -125,83 +167,182 @@ fn serveFile(conn: std.net.StreamServer.Connection, id: []const u8) !void {
     }
 }
 
-fn handleUpload(conn: std.net.StreamServer.Connection, request: []const u8, body_start: usize) !void {
-    const header_end = std.mem.indexOf(u8, request, "\r\n\r\n").?;
-    const headers = request[0..header_end];
+fn checkLimit(ip: u32, size: u64) !bool {
+    const day = @divFloor(time.timestamp(), 86400);
+    const key = IpDay{ .ip = ip, .day = day };
+    mutex.lock();
+    const current = ip_usage.get(key) orelse 0;
+    if (current + size > DAILY_LIMIT) {
+        mutex.unlock();
+        return false;
+    }
+    const gop = ip_usage.getOrPut(key) catch {
+        mutex.unlock();
+        return false;
+    };
+    if (gop.found_existing) {
+        gop.value_ptr.* += size;
+    } else {
+        gop.key_ptr.* = key;
+        gop.value_ptr.* = size;
+    }
+    mutex.unlock();
+    return true;
+}
 
+fn handleChunk(conn: std.net.StreamServer.Connection, headers: []const u8, request: []const u8, body_start: usize, request_len: usize, ip: u32) !void {
     const content_len = blk: {
-        var iter = std.mem.split(u8, headers, "\r\n");
-        while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "Content-Length: ")) {
-                break :blk try std.fmt.parseInt(u64, line[16..], 10);
-            }
-        }
-        return sendError(conn, "Missing Content-Length");
+        const val = getHeader(headers, "Content-Length: ") orelse {
+            std.log.warn("Missing Content-Length", .{});
+            return sendError(conn, "Missing Content-Length");
+        };
+        break :blk std.fmt.parseInt(u64, val, 10) catch {
+            std.log.warn("Invalid Content-Length: {s}", .{val});
+            return sendError(conn, "Invalid Content-Length");
+        };
+    };
+
+    const upload_id = blk: {
+        const val = getHeader(headers, "X-Upload-Id: ") orelse {
+            std.log.warn("Missing X-Upload-Id", .{});
+            return sendError(conn, "Missing X-Upload-Id");
+        };
+        break :blk try allocator.dupe(u8, val);
+    };
+    defer allocator.free(upload_id);
+
+    const chunk_idx = blk: {
+        const val = getHeader(headers, "X-Chunk-Index: ") orelse "0";
+        break :blk std.fmt.parseInt(u32, val, 10) catch 0;
+    };
+
+    const total_chunks = blk: {
+        const val = getHeader(headers, "X-Total-Chunks: ") orelse "1";
+        break :blk std.fmt.parseInt(u32, val, 10) catch 1;
     };
 
     const filename = blk: {
-        var iter = std.mem.split(u8, headers, "\r\n");
-        while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "X-Filename: ")) {
-                break :blk try allocator.dupe(u8, line[12..]);
-            }
-        }
-        break :blk try allocator.dupe(u8, "unnamed");
+        const val = getHeader(headers, "X-Filename: ") orelse "unnamed";
+        break :blk try allocator.dupe(u8, val);
     };
     defer allocator.free(filename);
 
     const ttl = blk: {
-        var iter = std.mem.split(u8, headers, "\r\n");
-        while (iter.next()) |line| {
-            if (std.mem.startsWith(u8, line, "X-Ttl: ")) {
-                break :blk try allocator.dupe(u8, line[7..]);
-            }
-        }
-        break :blk try allocator.dupe(u8, "48h");
+        const val = getHeader(headers, "X-Ttl: ") orelse "30m";
+        break :blk try allocator.dupe(u8, val);
     };
     defer allocator.free(ttl);
 
-    if (content_len > MAX_FILE_SIZE) return sendError(conn, "File too large");
+    const total_size = blk: {
+        const val = getHeader(headers, "X-Total-Size: ") orelse {
+            std.log.warn("Missing X-Total-Size", .{});
+            return sendError(conn, "Missing X-Total-Size");
+        };
+        break :blk std.fmt.parseInt(u64, val, 10) catch {
+            std.log.warn("Invalid X-Total-Size", .{});
+            return sendError(conn, "Invalid X-Total-Size");
+        };
+    };
 
-    const id = try generateId();
-    const folder_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ DATA_DIR, id });
+    if (total_size > MAX_FILE_SIZE) return sendError(conn, "File too large");
+    if (chunk_idx == 0 and !try checkLimit(ip, total_size)) return sendError(conn, "Daily limit exceeded");
+
+    const folder_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ DATA_DIR, upload_id });
     defer allocator.free(folder_path);
-    try fs.cwd().makePath(folder_path);
+    if (chunk_idx == 0) {
+        fs.cwd().makePath(folder_path) catch |err| {
+            std.log.warn("Failed to create path: {any}", .{err});
+            return sendError(conn, "Server error");
+        };
+    }
 
-    const filepath = try std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_path, id });
-    defer allocator.free(filepath);
+    const chunk_path = try std.fmt.allocPrint(allocator, "{s}/{s}.{d}.tmp", .{ folder_path, upload_id, chunk_idx });
+    defer allocator.free(chunk_path);
 
-    const file = try fs.cwd().createFile(filepath, .{});
+    const file = fs.cwd().createFile(chunk_path, .{}) catch |err| {
+        std.log.warn("Failed to create chunk file: {any}", .{err});
+        return sendError(conn, "Server error");
+    };
     defer file.close();
 
     var body_read: usize = 0;
-    if (body_start < request.len) {
-        const first_chunk = request[body_start..];
-        try file.writeAll(first_chunk);
-        body_read = first_chunk.len;
+    if (body_start < request_len) {
+        const first_chunk = request[body_start..request_len];
+        const to_write = @min(first_chunk.len, content_len);
+        file.writeAll(first_chunk[0..to_write]) catch |err| {
+            std.log.warn("Failed to write chunk: {any}", .{err});
+            return sendError(conn, "Server error");
+        };
+        body_read = to_write;
     }
 
-    var buf: [8192]u8 = undefined;
+    var buf: [CHUNK_SIZE]u8 = undefined;
     while (body_read < content_len) {
-        const bytes = try conn.stream.read(&buf);
+        const need = @min(buf.len, content_len - body_read);
+        const bytes = conn.stream.read(buf[0..need]) catch |err| {
+            std.log.warn("Failed to read from connection: {any}", .{err});
+            return;
+        };
         if (bytes == 0) break;
-        try file.writeAll(buf[0..bytes]);
+        file.writeAll(buf[0..bytes]) catch |err| {
+            std.log.warn("Failed to write chunk: {any}", .{err});
+            return sendError(conn, "Server error");
+        };
         body_read += bytes;
     }
 
-    const id_copy = try allocator.dupe(u8, id);
-    const path_copy = try allocator.dupe(u8, filepath);
+    if (chunk_idx == total_chunks - 1) {
+        const final_path = try std.fmt.allocPrint(allocator, "{s}/{s}.bin", .{ folder_path, upload_id });
+        defer allocator.free(final_path);
+        const final_file = fs.cwd().createFile(final_path, .{}) catch |err| {
+            std.log.warn("Failed to create final file: {any}", .{err});
+            return sendError(conn, "Server error");
+        };
+        defer final_file.close();
 
-    mutex.lock();
-    try files.put(id_copy, .{
-        .path = path_copy,
-        .name = try allocator.dupe(u8, filename),
-        .size = body_read,
-        .expires = time.timestamp() + parseTtl(ttl),
-    });
-    mutex.unlock();
+        var i: u32 = 0;
+        while (i < total_chunks) : (i += 1) {
+            const part_path = try std.fmt.allocPrint(allocator, "{s}/{s}.{d}.tmp", .{ folder_path, upload_id, i });
+            defer allocator.free(part_path);
+            const part = fs.cwd().openFile(part_path, .{}) catch |err| {
+                std.log.warn("Missing chunk {d}: {any}", .{ i, err });
+                continue;
+            };
+            defer part.close();
+            var pbuf: [CHUNK_SIZE]u8 = undefined;
+            while (true) {
+                const bytes = part.read(&pbuf) catch |err| {
+                    std.log.warn("Failed to read chunk {d}: {any}", .{ i, err });
+                    break;
+                };
+                if (bytes == 0) break;
+                final_file.writeAll(pbuf[0..bytes]) catch |err| {
+                    std.log.warn("Failed to write to final: {any}", .{err});
+                    return sendError(conn, "Server error");
+                };
+            }
+            fs.cwd().deleteFile(part_path) catch {};
+        }
 
-    const resp = try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"url\":\"/s/{s}\",\"name\":\"{s}\"}}", .{ id, id, filename });
+        const id_copy = try allocator.dupe(u8, upload_id);
+        const path_copy = try allocator.dupe(u8, final_path);
+
+        mutex.lock();
+        try files.put(id_copy, .{
+            .path = path_copy,
+            .name = try allocator.dupe(u8, filename),
+            .size = total_size,
+            .expires = time.timestamp() + parseTtl(ttl),
+        });
+        mutex.unlock();
+
+        std.log.info("File uploaded: {s} ({d} bytes)", .{ filename, total_size });
+    }
+
+    const resp = if (chunk_idx == total_chunks - 1)
+        try std.fmt.allocPrint(allocator, "{{\"id\":\"{s}\",\"url\":\"/s/{s}\",\"name\":\"{s}\"}}", .{ upload_id, upload_id, filename })
+    else
+        try std.fmt.allocPrint(allocator, "{{\"ok\":true,\"chunk\":{d}}}", .{chunk_idx});
     defer allocator.free(resp);
 
     const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ resp.len, resp });
@@ -236,6 +377,7 @@ fn cleanupTask() !void {
     while (true) {
         time.sleep(60 * time.ns_per_s);
         const now = time.timestamp();
+        const day = @divFloor(now, 86400);
 
         mutex.lock();
         var to_delete = std.ArrayList([]const u8).init(allocator);
@@ -259,6 +401,13 @@ fn cleanupTask() !void {
                 allocator.free(entry.value_ptr.name);
                 _ = files.remove(id);
                 allocator.free(id);
+            }
+        }
+
+        var ip_iter = ip_usage.iterator();
+        while (ip_iter.next()) |entry| {
+            if (entry.key_ptr.day < day - 1) {
+                _ = ip_usage.remove(entry.key_ptr.*);
             }
         }
         mutex.unlock();
