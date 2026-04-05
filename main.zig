@@ -1,6 +1,7 @@
 const std = @import("std");
 const fs = std.fs;
 const time = std.time;
+const Uri = std.Uri;
 
 const PORT = 8080;
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024;
@@ -223,7 +224,10 @@ fn handleChunk(conn: std.net.StreamServer.Connection, headers: []const u8, reque
 
     const filename = blk: {
         const val = getHeader(headers, "X-Filename: ") orelse "unnamed";
-        break :blk try allocator.dupe(u8, val);
+        const decoded = Uri.unescapeString(allocator, val) catch {
+            break :blk try allocator.dupe(u8, val);
+        };
+        break :blk decoded;
     };
     defer allocator.free(filename);
 
