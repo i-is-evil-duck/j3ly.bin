@@ -114,6 +114,8 @@ fn handleConnection(conn: std.net.StreamServer.Connection) !void {
             try serveIndex(conn);
         } else if (std.mem.startsWith(u8, path, "/s/")) {
             try serveFile(conn, path[3..]);
+        } else if (std.mem.eql(u8, path, "/favicon.png")) {
+            try serveStatic(conn, "favicon.png", "image/png");
         } else {
             try send404(conn);
         }
@@ -130,6 +132,22 @@ fn serveIndex(conn: std.net.StreamServer.Connection) !void {
     defer allocator.free(response);
     try conn.stream.writeAll(response);
     try conn.stream.writeAll(html);
+}
+
+fn serveStatic(conn: std.net.StreamServer.Connection, filename: []const u8, mime: []const u8) !void {
+    const file = fs.cwd().openFile(filename, .{}) catch return send404(conn);
+    defer file.close();
+    const stat = try file.stat();
+    const header = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ mime, stat.size });
+    defer allocator.free(header);
+    try conn.stream.writeAll(header);
+
+    var buf: [8192]u8 = undefined;
+    while (true) {
+        const bytes = try file.read(&buf);
+        if (bytes == 0) break;
+        try conn.stream.writeAll(buf[0..bytes]);
+    }
 }
 
 fn serveFile(conn: std.net.StreamServer.Connection, id: []const u8) !void {
