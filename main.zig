@@ -112,6 +112,8 @@ fn handleConnection(conn: std.net.StreamServer.Connection) !void {
     if (std.mem.eql(u8, method, "GET")) {
         if (std.mem.eql(u8, path, "/")) {
             try serveIndex(conn);
+        } else if (std.mem.eql(u8, path, "/a.png")) {
+            try serveFavicon(conn);
         } else if (std.mem.startsWith(u8, path, "/s/")) {
             try serveFile(conn, path[3..]);
         } else {
@@ -130,6 +132,14 @@ fn serveIndex(conn: std.net.StreamServer.Connection) !void {
     defer allocator.free(response);
     try conn.stream.writeAll(response);
     try conn.stream.writeAll(html);
+}
+
+fn serveFavicon(conn: std.net.StreamServer.Connection) !void {
+    const png = @embedFile("a.png");
+    const response = try std.fmt.allocPrint(allocator, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{png.len});
+    defer allocator.free(response);
+    try conn.stream.writeAll(response);
+    try conn.stream.writeAll(png);
 }
 
 fn serveFile(conn: std.net.StreamServer.Connection, id: []const u8) !void {
