@@ -3,8 +3,7 @@
 
 ## About
 A super tiny temp file sharing website writen in Zig with a docker build size under 56.1 KB!!!
-
-<img src="https://github.com/i-is-evil-duck/j3ly.biin/blob/main/imgs/j3lybin.png" />
+[![img](https://github.com/i-is-evil-duck/j3ly.biin/blob/main/imgs/j3lybin.png)](https://bin.j3ly.com)
 
 you can check it out at [bin.j3ly.com](https://bin.j3ly.com) 
 
