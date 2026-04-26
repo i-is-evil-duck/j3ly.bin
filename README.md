@@ -1,8 +1,10 @@
-# J3ly.Biin  <br />  <img alt="Stargazers" src="https://img.shields.io/github/stars/i-is-evil-duck/zig.bin?style=for-the-badge&logo=starship&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41">
+# J3ly.Bin  <br />  <img alt="Stargazers" src="https://img.shields.io/github/stars/i-is-evil-duck/zig.bin?style=for-the-badge&logo=starship&color=C9CBFF&logoColor=D9E0EE&labelColor=302D41">
 
 
-## J3ly Biin
-A super tiny temp file sharing website in Zig and build size under 56.1 KB!!!
+## About
+A super tiny temp file sharing website writen in Zig with a docker build size under 56.1 KB!!!
+
+<img src="https://github.com/i-is-evil-duck/j3ly.biin/blob/main/imgs/j3lybin.png" />
 
 you can check it out at [bin.j3ly.com](https://bin.j3ly.com) 
 
